@@ -1,0 +1,15 @@
+train:
+  id: boxing_v2 # pong_v3
+  done_on_life_loss: True
+  size: 64
+  max_episode_steps: null
+  is_multiagent: True
+  
+test:
+  id: ${..train.id}
+  done_on_life_loss: False
+  size: ${..train.size}
+  max_episode_steps: null
+  is_multiagent: True
+
+keymap: atari/${.train.id}

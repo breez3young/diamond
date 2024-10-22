@@ -39,10 +39,12 @@ class DenoiserConfig:
 
 
 class Denoiser(nn.Module):
-    def __init__(self, cfg: DenoiserConfig) -> None:
+    def __init__(self, cfg: DenoiserConfig,
+                 is_multiagent: bool = False,
+                 num_agents: int = None) -> None:
         super().__init__()
         self.cfg = cfg
-        self.inner_model = InnerModel(cfg.inner_model)
+        self.inner_model = InnerModel(cfg.inner_model, is_multiagent=is_multiagent, num_agents=num_agents)
         self.sample_sigma_training = None
 
     @property
@@ -95,6 +97,12 @@ class Denoiser(nn.Module):
         seq_length = batch.obs.size(1) - n
 
         all_obs = batch.obs.clone()
+
+        # 这里对于multi-agent variant atari使用的是极端的处理方式，因为两个智能体的observation (RGB images)是一致的，所以我们只用考虑一张图
+        if all_obs.ndim == 6:   # (b, seq_length, num_agents, c, h, w)
+            all_obs = all_obs.mean(dim=2)
+
+        import ipdb; ipdb.set_trace()
         loss = 0
 
         for i in range(seq_length):

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 
 from envs import TorchEnv, WorldModelEnv
-from models.actor_critic import ActorCritic, ActorCriticConfig, ActorCriticLossConfig
+from models.actor_critic import ActorCritic, ActorCriticConfig, ActorCriticLossConfig, IndependentActorCritic
 from models.diffusion import Denoiser, DenoiserConfig, SigmaDistributionConfig
 from models.rew_end_model import RewEndModel, RewEndModelConfig
 from utils import extract_state_dict
@@ -26,11 +26,18 @@ class AgentConfig:
 
 
 class Agent(nn.Module):
-    def __init__(self, cfg: AgentConfig) -> None:
+    def __init__(self, cfg: AgentConfig,
+                 is_multiagent: bool = False,
+                 num_agents: int = None) -> None:
         super().__init__()
         self.denoiser = Denoiser(cfg.denoiser)
         self.rew_end_model = RewEndModel(cfg.rew_end_model)
-        self.actor_critic = ActorCritic(cfg.actor_critic)
+        self.is_ma = is_multiagent
+        if is_multiagent:
+            self.num_agents = num_agents
+            self.actor_critic = IndependentActorCritic(cfg.actor_critic, num_agents) # 没考虑不同agent之间使用不同的更新权重
+        else:
+            self.actor_critic = ActorCritic(cfg.actor_critic)
 
     @property
     def device(self):

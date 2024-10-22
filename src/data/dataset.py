@@ -105,11 +105,21 @@ class Dataset(StateDictMixin, torch.utils.data.Dataset):
             self.lengths[episode_id] = len(episode)
             self.start_idx[episode_id + 1 :] += incr_num_steps
             self.num_steps += incr_num_steps
-            self.counter_rew.subtract(old_episode.rew.sign().tolist())
-            self.counter_end.subtract(old_episode.end.tolist())
 
-        self.counter_rew.update(episode.rew.sign().tolist())
-        self.counter_end.update(episode.end.tolist())
+            if episode.rew.ndim == 1:
+                self.counter_rew.subtract(old_episode.rew.sign().tolist())
+                self.counter_end.subtract(old_episode.end.tolist())
+            
+            else:
+                self.counter_rew.subtract(old_episode.rew.reshape(-1,).sign().tolist())
+                self.counter_end.subtract(old_episode.end.any(-1).tolist())
+
+        if episode.rew.ndim == 1:
+            self.counter_rew.update(episode.rew.sign().tolist())
+            self.counter_end.update(episode.end.tolist())
+        else:
+            self.counter_rew.update(episode.rew.reshape(-1,).sign().tolist())
+            self.counter_end.update(episode.end.any(-1).tolist())
 
         if self._save_on_disk:
             episode.save(self._get_episode_path(episode_id))

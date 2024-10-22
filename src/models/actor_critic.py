@@ -37,9 +37,62 @@ class ActorCriticConfig:
     num_actions: Optional[int] = None
 
 
+class IndependentActorCritic(nn.Module):
+    def __init__(self, cfg: ActorCriticConfig, num_agents: int) -> None:
+        super().__init__()
+        self.agents = []
+        for _ in range(num_agents):
+            self.agents.append(
+                ActorCritic(cfg)
+            )
+        
+        self.agents = nn.ModuleList(self.agents)
+        self.is_ma = True
+        self.num_agents = num_agents
+
+        self.lstm_dim = cfg.lstm_dim
+
+        self.env_loop = None
+        self.loss_cfg = None
+
+    @property
+    def device(self) -> torch.device:
+        return self.agents[0].lstm.weight_hh.device
+
+    def setup_training(self, rl_env: Union[TorchEnv, WorldModelEnv], loss_cfg: ActorCriticLossConfig) -> None:
+        assert self.env_loop is None and self.loss_cfg is None
+        self.env_loop = make_env_loop(rl_env, self)
+        self.loss_cfg = loss_cfg
+
+    def predict_act_value(self, obs: Tensor, hx_cx: Tuple[Tensor, Tensor]) -> ActorCriticOutput:
+        assert obs.ndim == 5    # (b, n, c, h, w)
+        input_hx, input_cx = hx_cx  # input_hx -> (n, b, lstm_dim)
+
+        output_hx = torch.empty_like(input_hx)
+        output_cx = torch.empty_like(input_cx)
+
+        logits_act = []
+        vals = []
+
+        for i, agent in enumerate(self.agents):
+            x = agent.encoder(obs[:, i])
+            x = x.flatten(start_dim=1)
+            hx, cx = agent.lstm(x, (input_hx[i], input_cx[i]))
+            logits_act.append(agent.actor_linear(hx))
+            vals.append(agent.critic_linear(hx).squeeze(dim=1))
+
+            output_hx[i] = hx
+            output_cx[i] = cx
+
+        logits_act = torch.stack(logits_act, dim=1)
+        vals = torch.stack(vals, dim=1)
+        return ActorCriticOutput(logits_act, vals, (output_hx, output_cx))
+    
+
 class ActorCritic(nn.Module):
     def __init__(self, cfg: ActorCriticConfig) -> None:
         super().__init__()
+        self.is_ma = False
         self.encoder = ActorCriticEncoder(cfg)
         self.lstm_dim = cfg.lstm_dim
         input_dim_lstm = cfg.channels[-1] * (cfg.img_size // 2 ** (sum(cfg.down))) ** 2

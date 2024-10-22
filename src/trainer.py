@@ -105,8 +105,11 @@ class Trainer(StateDictMixin):
             num_actions = None
         num_actions, = broadcast_if_needed(num_actions)
 
+        self.is_multiagent = getattr(cfg.env.train, 'is_multiagent', False)
+        self.num_agents = getattr(train_env, 'num_agents', None)
+
         # Create models
-        self.agent = Agent(instantiate(cfg.agent, num_actions=num_actions)).to(self._device)
+        self.agent = Agent(instantiate(cfg.agent, num_actions=num_actions), is_multiagent = self.is_multiagent, num_agents = self.num_agents).to(self._device)
         self._agent = build_ddp_wrapper(**self.agent._modules) if dist.is_initialized() else self.agent
 
         if cfg.initialization.path_to_ckpt is not None:
@@ -124,7 +127,7 @@ class Trainer(StateDictMixin):
         ######################################################
 
         # Optimizers and LR schedulers
-
+        # 这里可能要根据不同智能体设置一下不同的ac optimizer
         def build_opt(name: str) -> torch.optim.AdamW:
             return configure_opt(getattr(self.agent, name), **getattr(cfg, name).optimizer)
 

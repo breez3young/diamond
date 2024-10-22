@@ -59,7 +59,11 @@ def make_collector(
 
         for i, (o, a, r, e, t) in enumerate(zip(all_obs, act, rew, end, trunc)):
             buffer[i].append((o, a, r, e, t))
-            dead[i] = (e + t).clip(max=1).item()
+            if model.is_ma:
+                dead[i] = (e + t).clip(max=1).any().item()
+            else:
+                # import ipdb; ipdb.set_trace()
+                dead[i] = (e + t).clip(max=1).item()
 
         num_episodes += sum(dead)
 
@@ -72,6 +76,7 @@ def make_collector(
             if add_to_dataset:
                 info = {"final_observation": infos["final_observation"][count_dead]} if dead[i] else {}
                 ep = Episode(*(torch.cat(x, dim=0) for x in zip(*buffer[i])), info).to("cpu")
+                # import ipdb; ipdb.set_trace()
                 if episode_ids[i] is not None:
                     ep = dataset.load_episode(episode_ids[i]) + ep
                 episode_ids[i] = dataset.add_episode(ep, episode_id=episode_ids[i])

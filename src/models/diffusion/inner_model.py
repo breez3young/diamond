@@ -21,7 +21,9 @@ class InnerModelConfig:
 
 
 class InnerModel(nn.Module):
-    def __init__(self, cfg: InnerModelConfig) -> None:
+    def __init__(self, cfg: InnerModelConfig,
+                 is_multiagent: bool = False,
+                 num_agents: int = None) -> None:
         super().__init__()
         self.noise_emb = FourierFeatures(cfg.cond_channels)
         self.act_emb = nn.Sequential(
