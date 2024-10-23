@@ -31,14 +31,24 @@ class Episode:
         return (self.end + self.trunc).clip(max=1)
 
     def compute_metrics(self) -> Dict[str, Any]:
-        return {"length": len(self), "return": self.rew.sum().item()}
+        if self.rew.ndim == 2:
+            num_agents = self.rew.size(1)
+            metric = {"length": len(self)}
+            for agent_id in range(num_agents):
+                metric[f"agent_{agent_id}/return"] = self.rew[:, agent_id].sum().item()
+
+            return metric
+        
+        else:
+            return {"length": len(self), "return": self.rew.sum().item()}
 
     @classmethod
     def load(cls, path: Path, map_location: Optional[torch.device] = None) -> Episode:
         return cls(
             **{
                 k: v.div(255).mul(2).sub(1) if k == "obs" else v
-                for k, v in torch.load(Path(path), map_location=map_location).items()
+                # for k, v in torch.load(Path(path), map_location=map_location).items()
+                for k, v in torch.load(Path(path), map_location=map_location, weights_only=True).items()
             }
         )
 

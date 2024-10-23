@@ -5,6 +5,7 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 from data import Batch
 from .inner_model import InnerModel, InnerModelConfig
@@ -47,6 +48,9 @@ class Denoiser(nn.Module):
         self.inner_model = InnerModel(cfg.inner_model, is_multiagent=is_multiagent, num_agents=num_agents)
         self.sample_sigma_training = None
 
+        self.is_multiagent = is_multiagent
+        self.num_agents = num_agents
+
     @property
     def device(self) -> torch.device:
         return self.inner_model.noise_emb.weight.device
@@ -59,6 +63,14 @@ class Denoiser(nn.Module):
             return s.exp().clip(cfg.sigma_min, cfg.sigma_max)
 
         self.sample_sigma_training = sample_sigma
+
+        if self.is_multiagent:
+            self.cond_quantiles_probs = torch.arange(self.num_agents, dtype=torch.float32)[1:] / self.num_agents
+            self.sigma_dist = torch.distributions.Normal(loc=cfg.loc, scale=cfg.scale)
+            probs_st = self.sigma_dist.cdf(torch.log(torch.tensor(cfg.sigma_min)))
+            probs_end = self.sigma_dist.cdf(torch.log(torch.tensor(cfg.sigma_max)))
+            probs_diff = probs_end - probs_st
+            self.cond_quantiles = self.sigma_dist.icdf(probs_st + self.cond_quantiles_probs * probs_diff).detach().exp()
     
     def apply_noise(self, x: Tensor, sigma: Tensor, sigma_offset_noise: float) -> Tensor:
         b, c, _, _ = x.shape 
@@ -102,7 +114,6 @@ class Denoiser(nn.Module):
         if all_obs.ndim == 6:   # (b, seq_length, num_agents, c, h, w)
             all_obs = all_obs.mean(dim=2)
 
-        import ipdb; ipdb.set_trace()
         loss = 0
 
         for i in range(seq_length):
@@ -118,7 +129,17 @@ class Denoiser(nn.Module):
             noisy_next_obs = self.apply_noise(next_obs, sigma, self.cfg.sigma_offset_noise)
 
             cs = self.compute_conditioners(sigma)
-            model_output = self.compute_model_output(noisy_next_obs, obs, act, cs)
+
+            # implement sequential causal graph
+            if act.ndim > 2:
+                last_timestep_agent_mask = torch.randint(0, self.num_agents, size=(b,)).to(self.device)
+                action_mask = torch.concat((torch.ones_like(act, device=self.device)[:, :-1], F.one_hot(last_timestep_agent_mask, num_classes=self.num_agents).unsqueeze(1).to(self.device)), dim=1)
+                act_cond = torch.masked_fill(act + 1, (1 - action_mask).to(torch.bool), 0)
+
+            else:
+                act_cond = act.clone()
+
+            model_output = self.compute_model_output(noisy_next_obs, obs, act_cond, cs)
 
             target = (next_obs - cs.c_skip * noisy_next_obs) / cs.c_out
             loss += F.mse_loss(model_output[mask], target[mask])

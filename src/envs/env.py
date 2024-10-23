@@ -46,6 +46,7 @@ def make_atari_env(
                 env = pong_v3.parallel_env(
                     # frameskip=1,
                     render_mode="rgb_array",
+                    max_cycles=2000,
                     # max_episode_steps=max_episode_steps,
                 )
             
@@ -53,6 +54,7 @@ def make_atari_env(
                 env = boxing_v2.parallel_env(
                     # frameskip=1,
                     render_mode="rgb_array",
+                    max_cycles=2000,
                     # max_episode_steps=max_episode_steps,
                 )
             

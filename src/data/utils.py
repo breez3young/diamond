@@ -36,7 +36,7 @@ def make_segment(episode: Episode, segment_id: SegmentId, should_pad: bool = Tru
         pad(episode.end[start:stop]),
         pad(episode.trunc[start:stop]),
         mask_padding,
-        info=episode.info,
+        info=episode.info,  # 这里单智能体的info是什么呢？
         id=SegmentId(segment_id.episode_id, start, stop),
     )
 

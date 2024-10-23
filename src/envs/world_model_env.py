@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Generator, List, Tuple
+from einops import repeat
 
 import torch
 from torch import Tensor
@@ -66,7 +67,11 @@ class WorldModelEnv:
         self.act_buffer[:, -1] = act
 
         next_obs, denoising_trajectory = self.predict_next_obs()
-        rew, end = self.predict_rew_end(next_obs.unsqueeze(1))
+        # 因为前面的极端处理，这里要给每个agent拷贝一份next_obs
+        if self.sampler.denoiser.is_multiagent:
+            next_obs = repeat(next_obs, 'b c h w -> b n c h w', n=self.sampler.denoiser.num_agents)
+
+        rew, end = self.predict_rew_end(next_obs.unsqueeze(1))  # 这里无论单智能体还是多智能体都是(b,) shape的end
 
         self.ep_len += 1
         trunc = (self.ep_len >= self.horizon).long()

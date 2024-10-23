@@ -30,8 +30,8 @@ class Agent(nn.Module):
                  is_multiagent: bool = False,
                  num_agents: int = None) -> None:
         super().__init__()
-        self.denoiser = Denoiser(cfg.denoiser)
-        self.rew_end_model = RewEndModel(cfg.rew_end_model)
+        self.denoiser = Denoiser(cfg.denoiser, is_multiagent=is_multiagent, num_agents=num_agents)
+        self.rew_end_model = RewEndModel(cfg.rew_end_model, is_multiagent=is_multiagent, num_agents=num_agents)
         self.is_ma = is_multiagent
         if is_multiagent:
             self.num_agents = num_agents

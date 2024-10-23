@@ -74,13 +74,17 @@ def make_env_loop(
                     val_bootstrap[dead] = val_final_obs
                 all_[-1][-1] = val_bootstrap
 
-            dead = torch.logical_or(end, trunc).any(dim=-1)
-            # ipdb.set_trace()
+            if is_ma and end.ndim == 2:
+                dead = torch.logical_or(end, trunc).any(dim=-1) # 这里的end, trunc默认shape为(num_envs, num_agents)
+            else:
+                dead = torch.logical_or(end, trunc)             # 这里的end, trunc默认shape为(num_envs,)
 
             if dead.any():
-                # import ipdb; ipdb.set_trace()
                 with torch.no_grad():
-                    _, val_final_obs, _ = model.predict_act_value(info["final_observation"], (hx[:, dead], cx[:, dead]))
+                    if is_ma:
+                        _, val_final_obs, _ = model.predict_act_value(info["final_observation"], (hx[:, dead], cx[:, dead]))
+                    else:
+                        _, val_final_obs, _ = model.predict_act_value(info["final_observation"], (hx[dead], cx[dead]))
                 reset_gate = 1 - dead.float().unsqueeze(1)
                 if is_ma:
                     reset_gate = reset_gate.unsqueeze(0).repeat(num_agents, 1, 1)
@@ -89,7 +93,10 @@ def make_env_loop(
                 if "burnin_obs" in info:
                     burnin_obs = info["burnin_obs"]
                     for i in range(burnin_obs.size(1)):
-                        _, _, (hx[dead], cx[dead]) = model.predict_act_value(burnin_obs[:, i], (hx[dead], cx[dead]))
+                        if is_ma:
+                            _, _, (hx[:, dead], cx[:, dead]) = model.predict_act_value(burnin_obs[:, i], (hx[:, dead], cx[:, dead]))
+                        else:
+                            _, _, (hx[dead], cx[dead]) = model.predict_act_value(burnin_obs[:, i], (hx[dead], cx[dead]))
 
             all_.append([obs, act, rew, end, trunc, logits_act, val, None])
             infos.append(info)
@@ -97,7 +104,6 @@ def make_env_loop(
             obs = next_obs
             n += 1
 
-        # ipdb.set_trace()
         with torch.no_grad():
             _, val_bootstrap, _ = model.predict_act_value(next_obs, (hx, cx))  # do not update hx/cx
 

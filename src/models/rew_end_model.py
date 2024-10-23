@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
+from einops import rearrange
 
 import torch
 from torch import Tensor
@@ -25,18 +26,47 @@ class RewEndModelConfig:
 
 
 class RewEndModel(nn.Module):
-    def __init__(self, cfg: RewEndModelConfig) -> None:
+    def __init__(self, cfg: RewEndModelConfig,
+                 is_multiagent: bool = False,
+                 num_agents: int = None) -> None:
         super().__init__()
+        self.is_multiagent = is_multiagent
+        self.num_agents = num_agents
         self.cfg = cfg
         self.encoder = RewEndEncoder(2 * cfg.img_channels, cfg.cond_channels, cfg.depths, cfg.channels, cfg.attn_depths)
         self.act_emb = nn.Embedding(cfg.num_actions, cfg.cond_channels)
+        
+        if is_multiagent:
+            # Option 1
+            self.aggregate_conv1d = nn.Conv1d(num_agents, 1, kernel_size=1, stride=1, padding=0)
+
+            # Option 2
+            # self.act_emb = nn.Sequential(
+            #     nn.Linear(cfg.num_actions * num_agents, cfg.cond_channels),
+            #     nn.SiLU(),
+            #     nn.Linear(cfg.cond_channels, cfg.cond_channels),
+            # )
+
         input_dim_lstm = cfg.channels[-1] * (cfg.img_size // 2 ** (len(cfg.depths) - 1)) ** 2
         self.lstm = nn.LSTM(input_dim_lstm, cfg.lstm_dim, batch_first=True)
-        self.head = nn.Sequential(
-            nn.Linear(cfg.lstm_dim, cfg.lstm_dim),
-            nn.SiLU(),
-            nn.Linear(cfg.lstm_dim, 3 + 2, bias=False),
-        )
+
+        if is_multiagent:
+            self.r_head = nn.Sequential(
+                nn.Linear(cfg.lstm_dim, cfg.lstm_dim),
+                nn.SiLU(),
+                nn.Linear(cfg.lstm_dim, 3 * num_agents, bias=False),
+            )
+            self.e_head = nn.Sequential(
+                nn.Linear(cfg.lstm_dim, cfg.lstm_dim),
+                nn.SiLU(),
+                nn.Linear(cfg.lstm_dim, 2, bias=False),
+            )
+        else:
+            self.head = nn.Sequential(
+                nn.Linear(cfg.lstm_dim, cfg.lstm_dim),
+                nn.SiLU(),
+                nn.Linear(cfg.lstm_dim, 3 + 2, bias=False),
+            )
         init_lstm(self.lstm)
 
     def predict_rew_end(
@@ -46,13 +76,44 @@ class RewEndModel(nn.Module):
         next_obs: Tensor,
         hx_cx: Optional[Tuple[Tensor, Tensor]] = None,
     ) -> Tuple[Tensor, Tensor, Tuple[Tensor, Tensor]]:
+        # 这里对于multi-agent variant atari使用的是极端的处理方式，因为两个智能体的observation (RGB images)是一致的，所以我们只用考虑一张图
+        if obs.ndim == 6:   # (b, seq_length, num_agents, c, h, w)
+            obs = obs.mean(dim=2)
+            next_obs = next_obs.mean(dim=2)
+
         b, t, c, h, w = obs.shape
-        obs, act, next_obs = obs.reshape(b * t, c, h, w), act.reshape(b * t), next_obs.reshape(b * t, c, h, w)
-        x = self.encoder(torch.cat((obs, next_obs), dim=1), self.act_emb(act))
+        if self.is_multiagent:
+            obs, act, next_obs = obs.reshape(b * t, c, h, w), act.reshape(b * t, -1), next_obs.reshape(b * t, c, h, w)
+        else:
+            obs, act, next_obs = obs.reshape(b * t, c, h, w), act.reshape(b * t), next_obs.reshape(b * t, c, h, w)
+
+        if self.is_multiagent:
+            # Option 1
+            act_feat = self.aggregate_conv1d(self.act_emb(act)).squeeze(1)
+
+            # Option 2
+            # act_feat = self.act_emb(act)
+            
+            x = self.encoder(torch.cat((obs, next_obs), dim=1), act_feat)
+
+        else:
+            x = self.encoder(torch.cat((obs, next_obs), dim=1), self.act_emb(act))
+
         x = x.reshape(b, t, -1)  # (b t) e h w -> b t (e h w)
         x, hx_cx = self.lstm(x, hx_cx)
-        logits = self.head(x)
-        return logits[:, :, :-2], logits[:, :, -2:], hx_cx
+        # logits = self.head(x)
+
+        if self.is_multiagent:
+            logits_r = self.r_head(x)
+            logits_r = rearrange(logits_r, 'b t (n e) -> b t n e', n=self.num_agents, e=3)
+            logits_e = self.e_head(x)
+
+        else:
+            logits = self.head(x)
+            logits_r = logits[:, :, :-2]
+            logits_e = logits[:, :, -2:]
+
+        return logits_r, logits_e, hx_cx
 
     def forward(self, batch: Batch) -> LossAndLogs:
         obs = batch.obs[:, :-1]
@@ -60,6 +121,9 @@ class RewEndModel(nn.Module):
         next_obs = batch.obs[:, 1:]
         rew = batch.rew[:, :-1]
         end = batch.end[:, :-1]
+        if end.ndim > 2:
+            end = end.any(dim=-1)
+
         mask = batch.mask_padding[:, :-1]
 
         # When dead, replace frame (gray padding) by true final obs
@@ -68,11 +132,21 @@ class RewEndModel(nn.Module):
             final_obs = torch.stack([i["final_observation"] for i, d in zip(batch.info, dead) if d]).to(obs.device)
             next_obs[dead, end[dead].argmax(dim=1)] = final_obs
 
+        # 这里对于multi-agent variant atari使用的是极端的处理方式，因为两个智能体的observation (RGB images)是一致的，所以我们只用考虑一张图
+        if obs.ndim == 6:   # (b, seq_length, num_agents, c, h, w)
+            obs = obs.mean(dim=2)
+            next_obs = next_obs.mean(dim=2)
+
         logits_rew, logits_end, _ = self.predict_rew_end(obs, act, next_obs)
+
         logits_rew = logits_rew[mask]
         logits_end = logits_end[mask]
         target_rew = rew[mask].sign().long().add(1)  # clipped to {-1, 0, 1}
         target_end = end[mask]
+
+        if self.is_multiagent:
+            logits_rew = rearrange(logits_rew, 'b n e -> (b n) e')
+            target_rew = rearrange(target_rew, 'b n -> (b n)')
 
         loss_rew = F.cross_entropy(logits_rew, target_rew)
         loss_end = F.cross_entropy(logits_end, target_end)

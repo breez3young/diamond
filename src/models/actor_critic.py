@@ -13,7 +13,7 @@ from .blocks import Conv3x3, SmallResBlock
 from coroutines.env_loop import make_env_loop
 from envs import TorchEnv, WorldModelEnv
 from utils import init_lstm, LossAndLogs
-
+from einops import repeat 
 
 ActorCriticOutput = namedtuple("ActorCriticOutput", "logits_act val hx_cx")
 
@@ -87,6 +87,63 @@ class IndependentActorCritic(nn.Module):
         logits_act = torch.stack(logits_act, dim=1)
         vals = torch.stack(vals, dim=1)
         return ActorCriticOutput(logits_act, vals, (output_hx, output_cx))
+
+    def forward(self) -> LossAndLogs:
+        c = self.loss_cfg
+        _, act, rew, end, trunc, logits_act, val, val_bootstrap, _ = self.env_loop.send(c.backup_every)
+
+        if self.is_ma:
+            # compute returns first
+            end     = repeat(end, 'b h -> b h n', n=self.num_agents)
+            trunc   = repeat(trunc, 'b h -> b h n', n=self.num_agents)
+            lambda_returns = compute_lambda_returns(rew, end, trunc, val_bootstrap, c.gamma, c.lambda_)
+
+            metrics = {}
+            loss = 0.
+            for agent_id in range(self.num_agents):
+                d = Categorical(logits=logits_act[:, :, agent_id])
+                entropy = d.entropy().mean()
+
+                loss_actions = (-d.log_prob(act[:, :, agent_id]) * (lambda_returns[:, :, agent_id] - val[:, :, agent_id]).detach()).mean()
+                loss_values = c.weight_value_loss * F.mse_loss(val[:, :, agent_id], lambda_returns[:, :, agent_id])
+                loss_entropy = -c.weight_entropy_loss * entropy
+
+                cur_agent_loss = loss_actions + loss_entropy + loss_values
+
+                loss += cur_agent_loss
+
+                cur_metrics = {
+                    f"agent_{agent_id}/policy_entropy": entropy.detach() / math.log(2),
+                    f"agent_{agent_id}/loss_actions": loss_actions.detach(),
+                    f"agent_{agent_id}/loss_entropy": loss_entropy.detach(),
+                    f"agent_{agent_id}/loss_values": loss_values.detach(),
+                    f"agent_{agent_id}/loss_total": cur_agent_loss.detach(),
+                }
+                metrics.update(cur_metrics)
+
+            metrics['loss_all_agents'] = loss.detach()
+
+        else:
+            d = Categorical(logits=logits_act)
+            entropy = d.entropy().mean()
+
+            lambda_returns = compute_lambda_returns(rew, end, trunc, val_bootstrap, c.gamma, c.lambda_)
+
+            loss_actions = (-d.log_prob(act) * (lambda_returns - val).detach()).mean()
+            loss_values = c.weight_value_loss * F.mse_loss(val, lambda_returns)
+            loss_entropy = -c.weight_entropy_loss * entropy
+
+            loss = loss_actions + loss_entropy + loss_values
+
+            metrics = {
+                "policy_entropy": entropy.detach() / math.log(2),
+                "loss_actions": loss_actions.detach(),
+                "loss_entropy": loss_entropy.detach(),
+                "loss_values": loss_values.detach(),
+                "loss_total": loss.detach(),
+            }
+
+        return loss, metrics
     
 
 class ActorCritic(nn.Module):
@@ -175,7 +232,8 @@ def compute_lambda_returns(
     gamma: float,
     lambda_: float,
 ) -> Tensor:
-    assert rew.ndim == 2 and rew.size() == end.size() == trunc.size() == val_bootstrap.size()
+    # assert rew.ndim == 2 and rew.size() == end.size() == trunc.size() == val_bootstrap.size()
+    assert rew.size() == end.size() == trunc.size() == val_bootstrap.size()
 
     rew = rew.sign()  # clip reward
 
