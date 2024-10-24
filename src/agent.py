@@ -35,7 +35,7 @@ class Agent(nn.Module):
         self.is_ma = is_multiagent
         if is_multiagent:
             self.num_agents = num_agents
-            self.actor_critic = IndependentActorCritic(cfg.actor_critic, num_agents) # 没考虑不同agent之间使用不同的更新权重
+            self.actor_critic = IndependentActorCritic(cfg.actor_critic, num_agents, mode="self-play") # 没考虑不同agent之间使用不同的更新权重
         else:
             self.actor_critic = ActorCritic(cfg.actor_critic)
 

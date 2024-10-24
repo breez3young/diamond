@@ -20,6 +20,12 @@ def get_keymap_and_action_names(name: str) -> Tuple[Keymap, ActionNames]:
 
     assert name.startswith("atari/")
     env_id = name.split("atari/")[1]
+
+    if env_id == "boxing_v2":
+        env_id = "BoxingNoFrameskip-v4"
+    elif env_id == "pong_v3":
+        env_id = "PongNoFrameskip-v4"
+
     action_names = [x.lower() for x in gymnasium.make(env_id).unwrapped.get_action_meanings()]
     keymap = {}
     for key, value in ATARI_KEYMAP.items():

@@ -13,7 +13,7 @@ from .blocks import Conv3x3, SmallResBlock
 from coroutines.env_loop import make_env_loop
 from envs import TorchEnv, WorldModelEnv
 from utils import init_lstm, LossAndLogs
-from einops import repeat 
+from einops import repeat
 
 ActorCriticOutput = namedtuple("ActorCriticOutput", "logits_act val hx_cx")
 
@@ -38,17 +38,35 @@ class ActorCriticConfig:
 
 
 class IndependentActorCritic(nn.Module):
-    def __init__(self, cfg: ActorCriticConfig, num_agents: int) -> None:
+    def __init__(self, cfg: ActorCriticConfig, num_agents: int, mode: str = "self-play") -> None:
+        '''
+        params `mode`: "self-play", "cooperative", "random"
+        '''
         super().__init__()
+        self.is_ma = True
+        self.num_agents = num_agents
+        self._actual_num_agents = num_agents
+        self.mode = mode
+        self.cfg = cfg
+
+        if mode == "self-play":
+            # Here we only consider 2 agents
+            self._actual_num_agents = 1     # only control the main agent, i.e., 1st agent
+        elif mode == "random":
+            self._actual_num_agents = 1     # only control the main agent, i.e., 1st agent
+
         self.agents = []
-        for _ in range(num_agents):
+        for _ in range(self._actual_num_agents):
             self.agents.append(
                 ActorCritic(cfg)
             )
         
         self.agents = nn.ModuleList(self.agents)
-        self.is_ma = True
-        self.num_agents = num_agents
+
+        if mode == "self-play":
+            self.competetitor = ActorCritic(cfg)
+            self.competetitor.load_state_dict(self.agents[-1].state_dict())
+            self.competetitor.requires_grad_(False)
 
         self.lstm_dim = cfg.lstm_dim
 
@@ -58,6 +76,11 @@ class IndependentActorCritic(nn.Module):
     @property
     def device(self) -> torch.device:
         return self.agents[0].lstm.weight_hh.device
+    
+    def update_other_agents(self):
+        if self.mode == "self-play":
+            self.competetitor.load_state_dict(self.agents[-1].state_dict())
+            self.competetitor.requires_grad_(False)
 
     def setup_training(self, rl_env: Union[TorchEnv, WorldModelEnv], loss_cfg: ActorCriticLossConfig) -> None:
         assert self.env_loop is None and self.loss_cfg is None
@@ -84,6 +107,20 @@ class IndependentActorCritic(nn.Module):
             output_hx[i] = hx
             output_cx[i] = cx
 
+        for j in range(self.num_agents - self._actual_num_agents):
+            if self.mode == "random":
+                logits_act.append((torch.ones(self.cfg.num_actions, device=vals[-1].device, dtype=torch.float32) / self.cfg.num_actions).detach())
+                vals.append(torch.zeros_like(vals[-1], device=vals[-1].device).detach())
+            elif self.mode == "self-play":
+                x = agent.encoder(obs[:, j + self._actual_num_agents])
+                x = x.flatten(start_dim=1)
+                hx, cx = agent.lstm(x, (input_hx[j + self._actual_num_agents], input_cx[j + self._actual_num_agents]))
+                logits_act.append(agent.actor_linear(hx))
+                vals.append(agent.critic_linear(hx).squeeze(dim=1))
+
+                output_hx[j + self._actual_num_agents] = hx
+                output_cx[j + self._actual_num_agents] = cx
+
         logits_act = torch.stack(logits_act, dim=1)
         vals = torch.stack(vals, dim=1)
         return ActorCriticOutput(logits_act, vals, (output_hx, output_cx))
@@ -100,7 +137,7 @@ class IndependentActorCritic(nn.Module):
 
             metrics = {}
             loss = 0.
-            for agent_id in range(self.num_agents):
+            for agent_id in range(self._actual_num_agents):
                 d = Categorical(logits=logits_act[:, :, agent_id])
                 entropy = d.entropy().mean()
 

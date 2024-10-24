@@ -76,8 +76,10 @@ class RewEndModel(nn.Module):
         next_obs: Tensor,
         hx_cx: Optional[Tuple[Tensor, Tensor]] = None,
     ) -> Tuple[Tensor, Tensor, Tuple[Tensor, Tensor]]:
+        assert not self.is_multiagent or (act.size(2) == self.num_agents and obs.size(2) == self.num_agents)
+
         # 这里对于multi-agent variant atari使用的是极端的处理方式，因为两个智能体的observation (RGB images)是一致的，所以我们只用考虑一张图
-        if obs.ndim == 6:   # (b, seq_length, num_agents, c, h, w)
+        if self.is_multiagent:   # (b, seq_length, num_agents, c, h, w)
             obs = obs.mean(dim=2)
             next_obs = next_obs.mean(dim=2)
 
@@ -116,6 +118,8 @@ class RewEndModel(nn.Module):
         return logits_r, logits_e, hx_cx
 
     def forward(self, batch: Batch) -> LossAndLogs:
+        assert not self.is_multiagent or (batch.act.size(2) == self.num_agents)
+
         obs = batch.obs[:, :-1]
         act = batch.act[:, :-1]
         next_obs = batch.obs[:, 1:]
@@ -131,11 +135,6 @@ class RewEndModel(nn.Module):
         if dead.any():
             final_obs = torch.stack([i["final_observation"] for i, d in zip(batch.info, dead) if d]).to(obs.device)
             next_obs[dead, end[dead].argmax(dim=1)] = final_obs
-
-        # 这里对于multi-agent variant atari使用的是极端的处理方式，因为两个智能体的observation (RGB images)是一致的，所以我们只用考虑一张图
-        if obs.ndim == 6:   # (b, seq_length, num_agents, c, h, w)
-            obs = obs.mean(dim=2)
-            next_obs = next_obs.mean(dim=2)
 
         logits_rew, logits_end, _ = self.predict_rew_end(obs, act, next_obs)
 

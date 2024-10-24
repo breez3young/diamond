@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import pygame
+import random
 import torch
 from torch import Tensor
 
@@ -39,6 +40,10 @@ class PlayEnv:
         self.env_id = 0
         self.env_name, self.env = self.envs[0]
         self.obs, self.t, self.return_, self.hx_cx, self.ckpt_id, self.buffer, self.rec_dataset = (None,) * 7
+
+        # for multi-agent atari variant
+        self.is_multiagent = self.env.sampler.denoiser.is_multiagent
+        self.num_agents = self.env.sampler.denoiser.num_agents
 
     def print_controls(self) -> None:
         print("\nControls (play mode):\n")
@@ -111,9 +116,25 @@ class PlayEnv:
 
     @torch.no_grad()
     def step(self, act: int) -> Tuple[Tensor, Tensor, Tensor, Tensor, Dict[str, Any]]:
+        bs = self.obs.size(0)
+        assert bs == 1
+
         if self.is_human_player:
-            act = torch.tensor([act], device=self.agent.device)
+            if self.is_multiagent:
+                # 默认除第一个agent外为随机采样
+                final_act =[act]
+                for _ in range(self.num_agents - 1):
+                    # final_act.append(random.randint(0, len(self.action_names) - 1))
+                    final_act.append(0)
+                
+                act = torch.tensor([final_act], device=self.agent.device)
+            else:
+                act = torch.tensor([act], device=self.agent.device)
+            
+            # print(f"current action in world model")
+
         else:
+            # 多智能体世界模型 play_env 暂时不支持actor_critic自动交互
             logits_act, value, self.hx_cx = self.agent.actor_critic.predict_act_value(self.obs, self.hx_cx)
             dst = torch.distributions.categorical.Categorical(logits=logits_act)
             act = dst.sample()
@@ -122,7 +143,12 @@ class PlayEnv:
         value = None if self.is_human_player else f"{value.item():.2f}"
         next_obs, rew, end, trunc, env_info = self.env.step(act)
         data = OneStepData(self.obs, act, rew, end, trunc)
-        self.return_ += rew.item()
+
+        if self.is_multiagent:
+            self.return_ += rew[:, 0].item()
+        else:
+            self.return_ += rew.item()
+
         control = "human" if self.is_human_player else "policy"
         header = [
             [
@@ -134,16 +160,18 @@ class PlayEnv:
             [
                 f"Trunc : {bool(trunc)}",
                 f"Done  : {bool(end)}",
-                f"Reward: {rew.item():.2f}",
+                f"Reward: {rew.item():.2f}" if not self.is_multiagent else f"Reward: {rew[:, 0].item():.2f}",
                 f"Return: {self.return_:.2f}",
             ],
             [
-                f"Action : {self.action_names[act[0]]}",
+                f"Action : {self.action_names[act[0]]}" if not self.is_multiagent else f"Action : {[self.action_names[ac] for ac in act[0]]}",
                 f"Entropy: {entropy}",
                 f"Value  : {value}",
             ],
         ]
         info = {"header": header}
+
+        print(info)
 
         if end or trunc:
             d = "Dead" if end else ("Horizon" if self.is_wm_env() else "Timed out")

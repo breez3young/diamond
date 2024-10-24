@@ -86,6 +86,7 @@ class Denoiser(nn.Module):
         return Conditioners(*(add_dims(c, n) for c, n in zip((c_in, c_out, c_skip, c_noise), (4, 4, 4, 1, 1))))
 
     def compute_model_output(self, noisy_next_obs: Tensor, obs: Tensor, act: Tensor, cs: Conditioners) -> Tensor:
+        assert not self.is_multiagent or (act.size(2) == self.num_agents)
         rescaled_obs = obs / self.cfg.sigma_data
         rescaled_noise = noisy_next_obs * cs.c_in
         return self.inner_model(rescaled_noise, cs.c_noise, rescaled_obs, act)
@@ -105,22 +106,24 @@ class Denoiser(nn.Module):
         return denoised
 
     def forward(self, batch: Batch) -> LossAndLogs:
+        assert not self.is_multiagent or (batch.act.size(2) == self.num_agents)
+
         n = self.cfg.inner_model.num_steps_conditioning
         seq_length = batch.obs.size(1) - n
 
         all_obs = batch.obs.clone()
 
         # 这里对于multi-agent variant atari使用的是极端的处理方式，因为两个智能体的observation (RGB images)是一致的，所以我们只用考虑一张图
-        if all_obs.ndim == 6:   # (b, seq_length, num_agents, c, h, w)
-            all_obs = all_obs.mean(dim=2)
+        if self.is_multiagent:   # (b, seq_length, num_agents, c, h, w)
+            all_obs = all_obs.mean(dim=2)           # (b, seq_length, c, h, w)
 
         loss = 0
 
         for i in range(seq_length):
             obs = all_obs[:, i : n + i]
             next_obs = all_obs[:, n + i]
-            act = batch.act[:, i : n + i]
-            mask = batch.mask_padding[:, n + i]
+            act = batch.act[:, i : n + i]           # (b, seq_length, n) or (b, seq_length)
+            mask = batch.mask_padding[:, n + i]     # (b, seq_length)
 
             b, t, c, h, w = obs.shape
             obs = obs.reshape(b, t * c, h, w)

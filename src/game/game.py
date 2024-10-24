@@ -127,10 +127,19 @@ class Game:
 
             next_obs, rew, end, trunc, info = self.env.step(action)
 
-            ep_return += rew.item()
+            if self.env.is_multiagent:
+                ep_return += rew[:, 0].item()
+            else:
+                ep_return += rew.item()
+
+            # import ipdb; ipdb.set_trace()
+
             ep_length += 1
 
-            draw_game(obs)
+            if self.env.is_multiagent:
+                draw_game(obs.mean(dim=1))
+            else:
+                draw_game(obs)
 
             if self.verbose and info is not None:
                 clear_header()

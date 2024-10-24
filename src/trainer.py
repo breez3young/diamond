@@ -261,6 +261,10 @@ class Trainer(StateDictMixin):
 
             # Checkpointing
             self.save_checkpoint()
+
+            # update opponent
+            if self.epoch % 50 == 0 and self.is_multiagent:
+                self.agent.actor_critic.update_other_agents()
             
             if dist.is_initialized():
                 dist.barrier()

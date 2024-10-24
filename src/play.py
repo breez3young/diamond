@@ -16,6 +16,9 @@ from envs import make_atari_env, WorldModelEnv
 from game import ActionNames, DatasetEnv, Game, get_keymap_and_action_names, Keymap, NamedEnv, PlayEnv
 from utils import get_path_agent_ckpt, prompt_atari_game
 
+# import os
+# os.environ["SDL_VIDEODRIVER"] = "dummy"
+
 
 OmegaConf.register_new_resolver("eval", eval)
 
@@ -68,7 +71,7 @@ def prepare_dataset_mode(cfg: DictConfig) -> Tuple[DatasetEnv, Keymap, ActionNam
     return dataset_env, keymap
 
 
-def prepare_play_mode(cfg: DictConfig, args: argparse.Namespace) -> Tuple[PlayEnv, Keymap, ActionNames]:
+def prepare_play_mode(cfg: DictConfig, args: argparse.Namespace, model_dir: str = None) -> Tuple[PlayEnv, Keymap, ActionNames]:
     # Checkpoint
     if args.pretrained:
         name = prompt_atari_game()
@@ -80,7 +83,10 @@ def prepare_play_mode(cfg: DictConfig, args: argparse.Namespace) -> Tuple[PlayEn
         cfg.env.train.id = cfg.env.test.id = f"{name}NoFrameskip-v4"
         cfg.world_model_env.horizon = 50
     else:
-        path_ckpt = get_path_agent_ckpt("checkpoints", epoch=-1)
+        if model_dir is not None:
+            path_ckpt = get_path_agent_ckpt(model_dir + "/" + "checkpoints", epoch=-1)
+        else:
+            path_ckpt = get_path_agent_ckpt("checkpoints", epoch=-1)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -88,8 +94,15 @@ def prepare_play_mode(cfg: DictConfig, args: argparse.Namespace) -> Tuple[PlayEn
     train_env = make_atari_env(num_envs=1, device=device, **cfg.env.train)
     test_env = make_atari_env(num_envs=1, device=device, **cfg.env.test)
 
+    is_multiagent = getattr(cfg.env.train, 'is_multiagent', False)
+    num_agents = getattr(train_env, 'num_agents', None)
+
+    if is_multiagent:
+        cfg.world_model_env.diffusion_sampler.num_steps_denoising = num_agents * 2
+        cfg.world_model_env.horizon = 15
+
     # Models
-    agent = Agent(instantiate(cfg.agent, num_actions=test_env.num_actions)).to(device).eval()
+    agent = Agent(instantiate(cfg.agent, num_actions=test_env.num_actions), is_multiagent = is_multiagent, num_agents = num_agents).to(device).eval()
     agent.load(path_ckpt)
 
     # Collect for imagination's initialization
@@ -124,6 +137,7 @@ def prepare_play_mode(cfg: DictConfig, args: argparse.Namespace) -> Tuple[PlayEn
         args.store_denoising_trajectory,
         args.store_original_obs,
     )
+    play_env.switch_controller()
 
     return play_env, env_keymap
 
@@ -136,9 +150,11 @@ def main():
         return
 
     with initialize(version_base="1.3", config_path="../config"):
-        cfg = compose(config_name="trainer")
+        cfg = compose(config_name="trainer", overrides=["env=atari"])
 
-    env, keymap = prepare_dataset_mode(cfg) if args.dataset_mode else prepare_play_mode(cfg, args)
+
+    # env, keymap = prepare_dataset_mode(cfg) if args.dataset_mode else prepare_play_mode(cfg, args, model_dir="/home/eriri/Projects/diamond/outputs/2024-10-23/15-26-11")
+    env, keymap = prepare_dataset_mode(cfg) if args.dataset_mode else prepare_play_mode(cfg, args, model_dir="/home/eriri/Projects/diamond/outputs/2024-10-23/19-31-38")
     size = (args.size // cfg.env.train.size) * cfg.env.train.size  # window size
     game = Game(env, keymap, (size, size), fps=args.fps, verbose=not args.no_header)
     game.run()

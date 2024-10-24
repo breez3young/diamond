@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - env: atari
+  - env: ma_atari
   - agent: default
 
 hydra:
@@ -8,11 +8,11 @@ hydra:
     chdir: True
 
 wandb:
-  mode: disabled
-  project: null
+  mode: disabled # online
+  project: Multi-agent-Atari
   entity: null
   name: null
-  group: null
+  group: ${env.train.id}
   tags: null
   notes: null
 
@@ -37,10 +37,10 @@ collection:
     epsilon: 0.01
     num_steps_total: 100000
     first_epoch:
-      min: 2000 # 5000
+      min: 5000 # 5000
       max: 10000  # null: no maximum
       threshold_rew: 10
-    steps_per_epoch: 100
+    steps_per_epoch: 100 # 100
   test:
     num_envs: 1
     num_episodes: 4
@@ -78,12 +78,13 @@ world_model_env:
     s_tmin: 0.0
     s_tmax: ${eval:'float("inf")'}
     s_noise: 1.0
+    agent_order: "default"  # "default" | "reverse" | "random"
 
 denoiser:
   training:
     num_autoregressive_steps: 1
     start_after_epochs: 0
-    steps_first_epoch: 100 # 10000
+    steps_first_epoch: 10000
     steps_per_epoch: 400
     sample_weights: [0.1, 0.1, 0.1, 0.7]
     batch_size: 32
@@ -107,7 +108,7 @@ rew_end_model:
   training:
     seq_length: ${eval:'${world_model_env.horizon} + ${agent.denoiser.inner_model.num_steps_conditioning}'}
     start_after_epochs: 0
-    steps_first_epoch: 100 # 10000
+    steps_first_epoch: 10000
     steps_per_epoch: 400
     sample_weights: ${denoiser.training.sample_weights}
     batch_size: 32
