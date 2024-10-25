@@ -33,13 +33,12 @@ class DiffusionSampler:
     @torch.no_grad()
     def sample_agent_order(self, num_agents: int, order: str = "default"):
         assert self.cfg.num_steps_denoising % num_agents == 0
-        denoising_steps_per_agent = self.cfg.num_steps_denoising // num_agents
 
         if order == 'default':
-            agent_order = torch.arange(num_agents)
+            agent_order = torch.flip(torch.arange(num_agents), [0])
 
         elif order == 'reverse':
-            agent_order = torch.flip(torch.arange(num_agents), [0])
+            agent_order = torch.arange(num_agents)
         
         elif order == 'random':
             agent_order = torch.randperm(num_agents)
@@ -47,7 +46,7 @@ class DiffusionSampler:
         else:
             raise NotImplementedError('Plz specify the agent order for denoising.')
         
-        agent_order = repeat(agent_order, 'n -> n k', k=denoising_steps_per_agent).reshape(-1,)
+        # agent_order = repeat(agent_order, 'n -> n k', k=denoising_steps_per_agent).reshape(-1,)
         return agent_order
 
     @torch.no_grad()
@@ -68,6 +67,7 @@ class DiffusionSampler:
         if self.denoiser.is_multiagent:
             num_agents = self.denoiser.num_agents
             agent_order = self.sample_agent_order(num_agents, self.cfg.agent_order)
+            n_agents_mask = torch.sum(self.sigmas[:-1].unsqueeze(1) > self.denoiser.cond_quantiles.to(device), dim=1) + 1
             input_prev_act = prev_act.clone()
             
         # 每一个sigma就是一个denoising step
@@ -79,8 +79,10 @@ class DiffusionSampler:
                 x = x + eps * (sigma_hat**2 - sigma**2) ** 0.5
 
             if self.denoiser.is_multiagent:
-                current_enable_agent = agent_order[idx]
-                action_mask = torch.concat((torch.ones_like(input_prev_act, device=device)[:, :-1], repeat(F.one_hot(current_enable_agent, num_classes=num_agents).to(device), 'n -> b 1 n', b=b)), dim=1)
+                action_mask = torch.zeros(b, 1, *input_prev_act.shape[2:], device=device)
+                current_enable_agent = agent_order[:n_agents_mask[idx]]
+                action_mask[:, :, current_enable_agent] = 1
+                action_mask = torch.concat((torch.ones_like(input_prev_act, device=device)[:, :-1], action_mask), dim=1)
                 prev_act = torch.masked_fill(input_prev_act + 1, (1 - action_mask).to(torch.bool), 0)
 
             denoised = self.denoiser.denoise(x, sigma, prev_obs, prev_act)
@@ -98,6 +100,24 @@ class DiffusionSampler:
                 x = x + d_prime * dt
             trajectory.append(x)
         return x, trajectory
+    
+    @torch.no_grad()
+    def ensemble_sample(self, prev_obs: Tensor, prev_act: Tensor):
+        xs = []
+        trajs = []
+        ori_agent_order = self.cfg.agent_order
+        
+        x, trajectory = self.sample(prev_obs, prev_act)
+        xs.append(x)
+        trajs.append(trajectory)
+        
+        self.cfg.agent_order = "reverse"
+        x, trajectory = self.sample(prev_obs, prev_act)
+        xs.append(x)
+        trajs.append(trajectory)
+
+        self.cfg.agent_order = ori_agent_order
+        return xs, trajs
 
 
 def build_sigmas(num_steps: int, sigma_min: float, sigma_max: float, rho: int, device: torch.device) -> Tensor:

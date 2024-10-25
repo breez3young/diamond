@@ -135,10 +135,20 @@ class Denoiser(nn.Module):
 
             # implement sequential causal graph
             if act.ndim > 2:
-                last_timestep_agent_mask = torch.randint(0, self.num_agents, size=(b,)).to(self.device)
-                action_mask = torch.concat((torch.ones_like(act, device=self.device)[:, :-1], F.one_hot(last_timestep_agent_mask, num_classes=self.num_agents).unsqueeze(1).to(self.device)), dim=1)
-                act_cond = torch.masked_fill(act + 1, (1 - action_mask).to(torch.bool), 0)
+                # last_timestep_agent_mask = torch.randint(0, self.num_agents, size=(b,)).to(self.device)
+                # action_mask = torch.concat((torch.ones_like(act, device=self.device)[:, :-1], F.one_hot(last_timestep_agent_mask, num_classes=self.num_agents).unsqueeze(1).to(self.device)), dim=1)
+                # act_cond = torch.masked_fill(act + 1, (1 - action_mask).to(torch.bool), 0)
+                n_agents_mask = torch.sum(sigma.unsqueeze(1) > self.cond_quantiles.to(self.device), dim=1) + 1
+                act_mask = torch.zeros(b, 1, *act.shape[2:], device=self.device)
+                for k in range(b):
+                    active_agents = n_agents_mask[k].item()
+                    # 随机采样要激活的 agent 索引
+                    active_indices = torch.randperm(self.num_agents)[:active_agents]
+                    # 设置对应的 mask 为 1
+                    act_mask[k, :, active_indices] = 1
 
+                act_mask = torch.concat((torch.ones_like(act, device=self.device)[:, :-1], act_mask), dim=1)
+                act_cond = torch.masked_fill(act + 1, (1 - act_mask).to(torch.bool), 0)
             else:
                 act_cond = act.clone()
 

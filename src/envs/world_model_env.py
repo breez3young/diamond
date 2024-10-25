@@ -31,6 +31,7 @@ class WorldModelEnv:
         data_loader: DataLoader,
         cfg: WorldModelEnvConfig,
         return_denoising_trajectory: bool = False,
+        mode: str = "non-ensemble",
     ) -> None:
         self.sampler = DiffusionSampler(denoiser, cfg.diffusion_sampler)
         self.rew_end_model = rew_end_model
@@ -38,6 +39,7 @@ class WorldModelEnv:
         self.return_denoising_trajectory = return_denoising_trajectory
         self.num_envs = data_loader.batch_sampler.batch_size
         self.generator_init = self.make_generator_init(data_loader, cfg.num_batches_to_preload)
+        self.mode = mode # 'ensemble'
 
     @property
     def device(self) -> torch.device:
@@ -66,7 +68,13 @@ class WorldModelEnv:
     def step(self, act: torch.LongTensor) -> StepOutput:
         self.act_buffer[:, -1] = act
 
-        next_obs, denoising_trajectory = self.predict_next_obs()
+        if self.mode == 'ensemble':
+            next_obs, denoising_trajectory = self.predict_next_obs()
+            next_obs = next_obs[0]
+        else:
+            next_obs, denoising_trajectory = self.predict_next_obs()
+        
+
         # 因为前面的极端处理，这里要给每个agent拷贝一份next_obs
         if self.sampler.denoiser.is_multiagent:
             next_obs = repeat(next_obs, 'b c h w -> b n c h w', n=self.sampler.denoiser.num_agents)
@@ -84,7 +92,11 @@ class WorldModelEnv:
 
         info = {}
         if self.return_denoising_trajectory:
-            info["denoising_trajectory"] = torch.stack(denoising_trajectory, dim=1)
+            if self.mode == "ensemble":
+                denoising_trajectory = [torch.stack(e, dim=1) for e in denoising_trajectory]
+                info["denoising_trajectory"] = torch.concat(denoising_trajectory, dim=0)
+            else:
+                info["denoising_trajectory"] = torch.stack(denoising_trajectory, dim=1)
 
         if dead.any():
             self.reset_dead(dead)
@@ -95,7 +107,10 @@ class WorldModelEnv:
 
     @torch.no_grad()
     def predict_next_obs(self) -> Tuple[Tensor, List[Tensor]]:
-        return self.sampler.sample(self.obs_buffer, self.act_buffer)
+        if self.mode == 'ensemble':
+            return self.sampler.ensemble_sample(self.obs_buffer, self.act_buffer)
+        else:
+            return self.sampler.sample(self.obs_buffer, self.act_buffer)
 
     @torch.no_grad()
     def predict_rew_end(self, next_obs: Tensor) -> Tuple[Tensor, Tensor]:

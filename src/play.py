@@ -1,4 +1,5 @@
 import argparse
+import os
 from pathlib import Path
 from typing import Tuple
 
@@ -16,8 +17,7 @@ from envs import make_atari_env, WorldModelEnv
 from game import ActionNames, DatasetEnv, Game, get_keymap_and_action_names, Keymap, NamedEnv, PlayEnv
 from utils import get_path_agent_ckpt, prompt_atari_game
 
-# import os
-# os.environ["SDL_VIDEODRIVER"] = "dummy"
+os.environ["SDL_VIDEODRIVER"] = "dummy"
 
 
 OmegaConf.register_new_resolver("eval", eval)
@@ -138,7 +138,6 @@ def prepare_play_mode(cfg: DictConfig, args: argparse.Namespace, model_dir: str 
         args.store_original_obs,
     )
     play_env.switch_controller()
-
     return play_env, env_keymap
 
 
@@ -150,11 +149,12 @@ def main():
         return
 
     with initialize(version_base="1.3", config_path="../config"):
-        cfg = compose(config_name="trainer", overrides=["env=atari"])
+        cfg = compose(config_name="trainer", overrides=["env=ma_atari"])
 
 
     # env, keymap = prepare_dataset_mode(cfg) if args.dataset_mode else prepare_play_mode(cfg, args, model_dir="/home/eriri/Projects/diamond/outputs/2024-10-23/15-26-11")
-    env, keymap = prepare_dataset_mode(cfg) if args.dataset_mode else prepare_play_mode(cfg, args, model_dir="/home/eriri/Projects/diamond/outputs/2024-10-23/19-31-38")
+    # env, keymap = prepare_dataset_mode(cfg) if args.dataset_mode else prepare_play_mode(cfg, args, model_dir="/home/eriri/Projects/diamond/outputs/2024-10-23/19-31-38")
+    env, keymap = prepare_dataset_mode(cfg) if args.dataset_mode else prepare_play_mode(cfg, args, model_dir="/home/eriri/Downloads/self-play/1")
     size = (args.size // cfg.env.train.size) * cfg.env.train.size  # window size
     game = Game(env, keymap, (size, size), fps=args.fps, verbose=not args.no_header)
     game.run()

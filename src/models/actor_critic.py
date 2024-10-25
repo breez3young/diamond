@@ -109,14 +109,14 @@ class IndependentActorCritic(nn.Module):
 
         for j in range(self.num_agents - self._actual_num_agents):
             if self.mode == "random":
-                logits_act.append((torch.ones(self.cfg.num_actions, device=vals[-1].device, dtype=torch.float32) / self.cfg.num_actions).detach())
+                logits_act.append((torch.ones_like(logits_act[-1], device=vals[-1].device) / self.cfg.num_actions).detach())
                 vals.append(torch.zeros_like(vals[-1], device=vals[-1].device).detach())
             elif self.mode == "self-play":
                 x = agent.encoder(obs[:, j + self._actual_num_agents])
                 x = x.flatten(start_dim=1)
                 hx, cx = agent.lstm(x, (input_hx[j + self._actual_num_agents], input_cx[j + self._actual_num_agents]))
-                logits_act.append(agent.actor_linear(hx))
-                vals.append(agent.critic_linear(hx).squeeze(dim=1))
+                logits_act.append(agent.actor_linear(hx).detach())
+                vals.append(agent.critic_linear(hx).squeeze(dim=1).detach())
 
                 output_hx[j + self._actual_num_agents] = hx
                 output_cx[j + self._actual_num_agents] = cx

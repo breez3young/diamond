@@ -13,6 +13,10 @@ from data import Dataset, Episode
 from game.keymap import ActionNames, Keymap
 from envs import WorldModelEnv
 
+from PIL import Image
+import numpy as np
+import cv2
+
 
 NamedEnv = namedtuple("NamedEnv", "name env")
 OneStepData = namedtuple("OneStepData", "obs act rew end trunc")
@@ -110,6 +114,10 @@ class PlayEnv:
     def reset(self) -> Tuple[Tensor, None]:
         self.obs, _ = self.env.reset()
         self.t, self.return_, self.hx_cx = 0, 0, None
+
+        if self.is_multiagent:
+            self.hx_cx = tuple([torch.zeros(self.num_agents, 1, self.agent.actor_critic.lstm_dim, device=self.agent.actor_critic.device) for _ in range(2)])
+
         if self.recording_mode:
             self.reset_recording()
         return self.obs, None
@@ -123,6 +131,8 @@ class PlayEnv:
             if self.is_multiagent:
                 # 默认除第一个agent外为随机采样
                 final_act =[act]
+                final_act =[4] # debug 
+
                 for _ in range(self.num_agents - 1):
                     # final_act.append(random.randint(0, len(self.action_names) - 1))
                     final_act.append(0)
@@ -138,10 +148,17 @@ class PlayEnv:
             logits_act, value, self.hx_cx = self.agent.actor_critic.predict_act_value(self.obs, self.hx_cx)
             dst = torch.distributions.categorical.Categorical(logits=logits_act)
             act = dst.sample()
-            entropy = dst.entropy() / math.log(2)
+
+            entropy = (dst.entropy() / math.log(2)).mean()
+            value = value.mean()
         entropy = None if self.is_human_player else f"{entropy.item():.2f}"
         value = None if self.is_human_player else f"{value.item():.2f}"
         next_obs, rew, end, trunc, env_info = self.env.step(act)
+        
+        if end.ndim == 2:
+            end = end.any(dim=-1)
+            trunc = trunc.any(dim=-1)
+
         data = OneStepData(self.obs, act, rew, end, trunc)
 
         if self.is_multiagent:
@@ -192,7 +209,35 @@ class PlayEnv:
                 self.rec_dataset.add_episode(ep)
                 self.rec_dataset.save_to_default_path()
 
+        self.save_denoising_trajs()
+        import ipdb; ipdb.set_trace()
         self.obs = next_obs
         self.t += 1
 
         return next_obs, rew, end, trunc, info
+    
+    def save_denoising_trajs(self,):
+        cur_timestep = self.t
+        cur_denoising_traj = self.buffer["info"]["denoising_trajectory"][cur_timestep]
+        traj_length = cur_denoising_traj.size(1)
+        import ipdb; ipdb.set_trace()
+        cur_action = self.buffer['act'][cur_timestep]
+        action_text = "act_"
+        for i in range(cur_action.shape[1]):
+            action_text += f"{cur_action[0, i]}_"
+
+        # denoising_order = self.env.sampler.cfg.agent_order
+        dir_path = self.rec_dataset._default_path.parent
+        dir_path.mkdir(exist_ok=True, parents=True)
+
+        orders = ["default", "reverse"]
+        for j in range(cur_denoising_traj.size(0)):
+            for t_idx in range(traj_length):
+                denoising_order = orders[j]
+                file_name = dir_path / f"ts_{cur_timestep}_denoising_{t_idx}_{action_text}order_{denoising_order}.png"
+                cur_img = cur_denoising_traj[0, t_idx].permute(1, 2, 0)
+                cur_img = cur_img.clamp(-1, 1).add(1).div(2).mul(255).byte().cpu().numpy()
+                # import ipdb; ipdb.set_trace()
+                cur_img = cv2.cvtColor(cur_img, cv2.COLOR_RGB2BGR)
+                # 使用OpenCV保存图像
+                cv2.imwrite(file_name, cur_img)

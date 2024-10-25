@@ -74,7 +74,7 @@ world_model_env:
     sigma_max: 5.0
     rho: 7
     order: 1  # 1: Euler, 2: Heun
-    s_churn: 0.0  # Amount of stochasticity
+    s_churn: 0.0  # Amount of stochasticity, 0. equal to considering no external stochasticity from the sampling procedure
     s_tmin: 0.0
     s_tmax: ${eval:'float("inf")'}
     s_noise: 1.0
@@ -102,7 +102,7 @@ denoiser:
     loc: -0.4
     scale: 1.2
     sigma_min: 2e-3
-    sigma_max: 20
+    sigma_max: 5.1 # 20  # here we may need to set sigma_max equal to that during inference
 
 rew_end_model:
   training:
